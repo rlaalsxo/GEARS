@@ -12,6 +12,7 @@ import csv
 import os
 import anndata
 import pandas as pd
+from torch_geometric.data import DataLoader
 
 from .model import GEARS_Model
 from .inference import evaluate, compute_metrics, deeper_analysis, \
@@ -135,7 +136,7 @@ class GEARS:
                          decoder_hidden_size = 16,
                          num_similar_genes_go_graph = 20,
                          num_similar_genes_co_express_graph = 20,                    
-                         coexpress_threshold = 0.6,
+                         coexpress_threshold = 0.4,
                          uncertainty = False,
                          uncertainty_reg = 1,
                          direction_lambda = 1e-1,
@@ -358,7 +359,7 @@ class GEARS:
         savefile = {}
         self.saved_pred = {}
         self.saved_logvar_sum = {}
-        from torch_geometric.data import DataLoader
+        
         for pert in pert_list:
             try:
                 #If prediction is already saved, then skip inference
@@ -415,7 +416,45 @@ class GEARS:
             return results_pred, results_logvar_sum
         else:
             return results_pred
-        
+    def Generation(self, pert_list, model = None):
+        savefile = {}
+        results_logvar_sum = {}
+        if self.config['uncertainty']:
+            results_logvar = {}
+        if model is None:
+            model = self.best_model
+
+        model = model.to(self.device)
+        model.eval()
+
+        for pert in pert_list:
+            num_sells = 1000
+            cg = create_cell_graph_dataset_for_prediction(pert, self.ctrl_adata,
+                                                        self.pert_list, self.device, num_sells)
+            loader = DataLoader(cg, num_sells, shuffle = False)
+            batch = next(iter(loader))
+            batch.to(self.device)
+            with torch.no_grad():
+                if self.config['uncertainty']:
+                    p, unc = model(batch)
+                    results_logvar['_'.join(pert)] = np.mean(unc.detach().cpu().numpy(), axis = 0)
+                    results_logvar_sum['_'.join(pert)] = np.exp(-np.mean(results_logvar['_'.join(pert)]))
+                else:
+                    p = model(batch)
+            gene_names = self.adata.var['gene_name'].tolist()
+            savefile['_'.join(pert)] = p.detach().cpu().numpy()
+
+            for pert, data in savefile.items():
+                X = np.array(data)
+
+                obs = {'condition': [pert] * X.shape[0]}
+
+                var = pd.DataFrame({'gene_name': gene_names}, index=self.adata.var_names)
+                print(var.head())
+                adata = anndata.AnnData(X=X, obs=pd.DataFrame(obs), var=var)
+                
+                adata.write(f"results_pred_{pert}.h5ad")
+
     def GI_predict(self, combo, GI_genes_file='./genes_with_hi_mean.npy'):
         """
         Predict the GI scores following perturbation of a given gene combination

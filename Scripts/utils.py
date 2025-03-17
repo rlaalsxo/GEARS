@@ -12,6 +12,7 @@ import tarfile
 from sklearn.linear_model import TheilSenRegressor
 from dcor import distance_correlation
 from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor
 
 def parse_single_pert(i):
     a = i.split('+')[0]
@@ -235,9 +236,40 @@ def make_GO(data_path, pert_list, data_name, num_workers=25, save=True):
 
     return df_edge_list
 
+def make_GO_Window(data_path, pert_list, data_name, num_workers=25, save=True):
+    """
+    Creates Gene Ontology graph from a custom set of genes (Windows Compatible)
+    """
+    fname = f'./data/go_essential_{data_name}.csv'
+    if os.path.exists(fname):
+        return pd.read_csv(fname)
+
+    with open(os.path.join(data_path, 'gene2go_all.pkl'), 'rb') as f:
+        gene2go = pickle.load(f)
+
+    gene2go = {i: gene2go[i] for i in pert_list}
+
+    print('Creating custom GO graph, this can take a few minutes')
+    edge_list = []
+    
+    # ✅ ProcessPoolExecutor 사용 (Windows 호환)
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        results = list(executor.map(get_GO_edge_list, [(g, gene2go) for g in gene2go.keys()]))
+
+    for res in results:
+        edge_list.extend(res)
+
+    df_edge_list = pd.DataFrame(edge_list, columns=['source', 'target', 'importance'])
+
+    if save:
+        print('Saving edge_list to file')
+        df_edge_list.to_csv(fname, index=False)
+
+    return df_edge_list
+
 def get_similarity_network(network_type, adata, threshold, k,
                            data_path, data_name, split, seed, train_gene_set_size,
-                           set2conditions, default_pert_graph=True, pert_list=None):
+                           set2conditions, default_pert_graph=True, pert_list=None, window = True):
     
     if network_type == 'co-express':
         df_out = get_coexpression_network_from_train(adata, threshold, k,
@@ -253,8 +285,12 @@ def get_similarity_network(network_type, adata, threshold, k,
             df_jaccard = pd.read_csv(os.path.join(data_path, 
                                      'go_essential_all/go_essential_all.csv'))
 
-        else:
-            df_jaccard = make_GO(data_path, pert_list, data_name)
+        
+        else :
+            if window :
+                df_jaccard = make_GO_Window(data_path, pert_list, data_name)
+            else :
+                df_jaccard = make_GO(data_path, pert_list, data_name)
 
         df_out = df_jaccard.groupby('target').apply(lambda x: x.nlargest(k + 1,
                                     ['importance'])).reset_index(drop = True)
@@ -469,7 +505,10 @@ def create_cell_graph_dataset_for_prediction(pert_gene, ctrl_adata, gene_names,
     """
 
     # Get the indices (and signs) of applied perturbation
-    pert_idx = [np.where(p == np.array(gene_names))[0][0] for p in pert_gene]
+    if pert_gene is None or pert_gene == ['ctrl']:
+        pert_idx = [-1]
+    else:
+        pert_idx = [np.where(p == np.array(gene_names))[0][0] for p in pert_gene]
 
     Xs = ctrl_adata[np.random.randint(0, len(ctrl_adata), num_samples), :].X.toarray()
     # Create cell graphs
