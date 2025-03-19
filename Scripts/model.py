@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Sequential, Linear, ReLU
-
+import pandas as pd
 from torch_geometric.nn import SGConv
+import json
+import torch_geometric.utils as pyg_utils
 
 class MLP(torch.nn.Module):
 
@@ -55,8 +57,7 @@ class GEARS_Model(torch.nn.Module):
         self.num_layers_gene_pos = args['num_gene_gnn_layers']
         self.no_perturb = args['no_perturb']
         self.pert_emb_lambda = 0.2
-        
-        # perturbation positional embedding added only to the perturbed genes
+
         self.pert_w = nn.Linear(1, hidden_size)
            
         # gene/globel perturbation embedding dictionary lookup            

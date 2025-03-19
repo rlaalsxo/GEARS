@@ -13,7 +13,12 @@ import os
 import anndata
 import pandas as pd
 from torch_geometric.data import DataLoader
-
+from scipy.stats import pearsonr
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import font_manager
+from gears.inference import evaluate, compute_metrics, deeper_analysis
+import scanpy as sc
 from .model import GEARS_Model
 from .inference import evaluate, compute_metrics, deeper_analysis, \
                   non_dropout_analysis
@@ -320,7 +325,7 @@ class GEARS:
        
         torch.save(self.best_model.state_dict(), os.path.join(path, 'model.pt'))
     
-    def predict(self, pert_list, model=None):
+    def predict(self, pert_list, model=None, box_plot = False):
         """
         Predict the transcriptome given a list of genes/gene combinations being
         perturbed
@@ -356,14 +361,12 @@ class GEARS:
         model.eval()
         results_pred = {}
         results_logvar_sum = {}
-        savefile = {}
         self.saved_pred = {}
         self.saved_logvar_sum = {}
         
         for pert in pert_list:
             try:
                 #If prediction is already saved, then skip inference
-                # savefile['_'.join(pert)] = self.saved_pred['_'.join(pert)]
                 results_pred['_'.join(pert)] = self.saved_pred['_'.join(pert)]
                 if self.config['uncertainty']:
                     results_logvar_sum['_'.join(pert)] = self.saved_logvar_sum['_'.join(pert)]
@@ -384,30 +387,10 @@ class GEARS:
                     results_logvar_sum['_'.join(pert)] = np.exp(-np.mean(results_logvar['_'.join(pert)]))
                 else:
                     p = model(batch)
-            
-            # gene_names = self.adata.var['gene_name'].tolist()
-            # savefile['_'.join(pert)] = p.detach().cpu().numpy()
-            # adata_list = []
-
-            # for pert, data in savefile.items():
-            #     X = np.array(data)
-
-            #     obs = {'condition': [pert] * X.shape[0]}
-
-            #     var = pd.DataFrame({'gene_name': gene_names}, index=self.adata.var_names)
-            #     print(var.head())
-            #     adata = anndata.AnnData(X=X, obs=pd.DataFrame(obs), var=var)
-                
-            #     adata.write(f"results_pred_{pert}.h5ad")
-
-            # ctrl_cells = self.adata[self.adata.obs['condition'] == 'ctrl'].copy()
-            # adata_list.append(ctrl_cells)
-
-            # adata_all = anndata.concat(adata_list, join="outer")
-
-            # adata_all.write("results_pred.h5ad")
-                    
-            results_pred['_'.join(pert)] = np.mean(p.detach().cpu().numpy(), axis = 0)
+            if box_plot:
+                results_pred['_'.join(pert)] = p.detach().cpu().numpy()
+            else:
+                results_pred['_'.join(pert)] = np.mean(p.detach().cpu().numpy(), axis = 0)
                 
         self.saved_pred.update(results_pred)
         
@@ -416,7 +399,8 @@ class GEARS:
             return results_pred, results_logvar_sum
         else:
             return results_pred
-    def Generation(self, pert_list, model = None):
+        
+    def Generation(self, pert_list, num_cells, model = None):
         savefile = {}
         results_logvar_sum = {}
         if self.config['uncertainty']:
@@ -428,10 +412,10 @@ class GEARS:
         model.eval()
 
         for pert in pert_list:
-            num_sells = 1000
+            num_cells = num_cells
             cg = create_cell_graph_dataset_for_prediction(pert, self.ctrl_adata,
-                                                        self.pert_list, self.device, num_sells)
-            loader = DataLoader(cg, num_sells, shuffle = False)
+                                                        self.pert_list, self.device, num_cells)
+            loader = DataLoader(cg, num_cells, shuffle = False)
             batch = next(iter(loader))
             batch.to(self.device)
             with torch.no_grad():
@@ -453,7 +437,7 @@ class GEARS:
                 print(var.head())
                 adata = anndata.AnnData(X=X, obs=pd.DataFrame(obs), var=var)
                 
-                adata.write(f"results_pred_{pert}.h5ad")
+                adata.write(f"{self.model_path}/results_pred_{pert}.h5ad")
 
     def GI_predict(self, combo, GI_genes_file='./genes_with_hi_mean.npy'):
         """
@@ -498,7 +482,7 @@ class GEARS:
         pred = {p:pred[p][GI_genes_idx] for p in pred}
         return get_GI_params(pred, combo)
     
-    def plot_perturbation(self, query, save_file = None, model=None):
+    def plot_perturbation(self, query, save_file = None, model=None, box_plot = False):
         """
         Plot the perturbation graph
 
@@ -531,24 +515,33 @@ class GEARS:
         truth = adata[adata.obs.condition == query].X.toarray()[:, de_idx]
         
         query_ = [q for q in query.split('+') if q != 'ctrl']
-        pred = self.predict([query_], model = model)['_'.join(query_)][de_idx]
+        pred_output = self.predict([query_], model=model, box_plot=box_plot)
+        if self.config['uncertainty']:
+            pred, unc = pred_output  # 두 개의 반환값을 받음
+        else:
+            pred = pred_output  # 하나만 받음
+
+        pred = pred['_'.join(query_)][:, de_idx]
         ctrl_means = adata[adata.obs['condition'] == 'ctrl'].to_df().mean()[
             de_idx].values
 
         pred = pred - ctrl_means
         truth = truth - ctrl_means
-        
+        positions = np.arange(len(genes))
         plt.figure(figsize=[16.5,4.5])
         plt.title(query)
-        plt.boxplot(truth, showfliers=False,
-                    medianprops = dict(linewidth=0))    
-
-        for i in range(pred.shape[0]):
-            _ = plt.scatter(i+1, pred[i], color='red')
+        plt.boxplot(truth, positions = positions, showfliers=False,
+                    medianprops = dict(linewidth=0), whiskerprops=dict(color='Black', linewidth=1))    
+        if box_plot:
+            plt.boxplot(pred, positions = positions, showfliers=False, medianprops=dict(linewidth=0), whiskerprops=dict(color='red', linewidth=1), boxprops=dict(color='red'))
+        else:
+            for i in range(pred.shape[0]):
+                _ = plt.scatter(i+1, pred[i], color='red')
 
         plt.axhline(0, linestyle="dashed", color = 'green')
 
         ax = plt.gca()
+        ax.set_xticks(positions)
         ax.xaxis.set_ticklabels(genes, rotation = 90)
 
         plt.ylabel("Change in Gene Expression over Control",labelpad=10)
@@ -558,6 +551,69 @@ class GEARS:
         
         if save_file:
             plt.savefig(save_file, bbox_inches='tight')
+
+    def uncertainly(self, epoch):
+        test_res = evaluate(self.dataloader['test_loader'], self.model, self.config['uncertainty'], self.device)
+        test_metrics, test_pert_res = compute_metrics(test_res)
+        out = deeper_analysis(self.adata, test_res)
+        pert2unc = pd.DataFrame(tuple(zip(test_res['pert_cat'], np.mean(test_res['logvar'], axis = 1)))).groupby(0).agg(np.mean)
+        pert2unc = dict(zip(pert2unc.index.values, pert2unc.values))
+
+        metric = 'pearson_delta'
+        stats_summary = [np.exp(-pert2unc[i][0]) for i in test_pert_res.keys() if metric in out[i]]
+        metric_summary = [out[i][metric] for i in test_pert_res.keys() if metric in out[i]]
+        print(pearsonr(stats_summary, metric_summary))
+        font_dirs = ["./"]
+        font_files = font_manager.findSystemFonts(fontpaths=font_dirs)
+
+        for font_file in font_files:
+            font_manager.fontManager.addfont(font_file)
+            
+        sns.set( font = "Helvetica" )
+
+        sns.set(rc={'figure.figsize':(6,6)})
+        sns.set_theme(style="ticks", rc={"axes.facecolor": (0, 0, 0, 0)}, font = "Helvetica", font_scale=1.8)
+        pal = sns.color_palette("Set2").as_hex()
+        plot(stats_summary, metric_summary, epoch)
+
+        def plot(stats_summary, metric_summary, epoch):
+            ax = sns.regplot(np.array(stats_summary),
+                            np.array(metric_summary), 
+                            color = pal[2],
+                            ci = None
+                            )
+
+            sns.despine()
+
+            plt.ylabel("Pearson Correlation with True Delta \n Expression Across All Genes",labelpad=10)
+            plt.xlabel("Predicted Uncertainty",labelpad=10)
+            plt.tick_params(axis='x', which='major', pad=10)
+            plt.tick_params(axis='y', which='major', pad=5)
+            plt.savefig('uncertainty.pdf', bbox_inches='tight')
+            
+            plt.show()
+            
+            top = np.quantile(np.array(list(pert2unc.values())), 0.95)
+
+            m = 'pearson_delta'
+            ax = sns.distplot([i[m] for k, i in out.items() if (pert2unc[k][0] < top) and (m in i)], hist = False, color = "black")
+            ax = sns.distplot([i[m] for k, i in out.items() if (pert2unc[k][0] > top) and (m in i)], hist = False, color = "Red")
+
+            print('---- ' + m + '----')
+            total_mean = np.mean([i[m] for k, i in out.items() if (pert2unc[k][0] < top) and (m in i)])
+            after_filter_mean = np.mean([i[m] for k, i in out.items() if (pert2unc[k][0] > top) and (m in i)])
+            print('Total Mean: ' + str(total_mean))
+            print('After uncertainty filter Mean: ' + str(after_filter_mean))
+            print('Enrichment: ' + str((after_filter_mean - total_mean)/total_mean))
+
+            sns.despine()
+            ax.set_xlim((-0.24,1.24))
+            plt.xlabel("Pearson Correlation with True Delta \n Expression Across All Genes",labelpad=10)
+            plt.ylabel("Density of Perturbations",labelpad=10)
+            plt.tick_params(axis='x', which='major', pad=10)
+            plt.tick_params(axis='y', which='major', pad=5)
+            plt.savefig(f'{self.model_path}/prioritize_uncertainty_{epoch}.pdf', bbox_inches='tight')
+            plt.show()
     
     def train(self, predict_perturbation,
               epochs = 20,
@@ -685,7 +741,7 @@ class GEARS:
                 best_model = deepcopy(self.model)
 
             save_flie = f"{self.model_path}/{predict_perturbation}_{epoch+1}"
-            self.plot_perturbation(predict_perturbation, save_flie, model=self.model)
+            self.plot_perturbation(predict_perturbation, save_flie, model=self.model, box_plot = True)
         print_sys("Done!")
         self.best_model = best_model
         if 'test_loader' not in self.dataloader:

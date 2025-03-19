@@ -12,7 +12,7 @@ import tarfile
 from sklearn.linear_model import TheilSenRegressor
 from dcor import distance_correlation
 from multiprocessing import Pool
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 def parse_single_pert(i):
     a = i.split('+')[0]
@@ -237,11 +237,11 @@ def make_GO(data_path, pert_list, data_name, num_workers=25, save=True):
     return df_edge_list
 
 def make_GO_Window(data_path, pert_list, data_name, num_workers=25, save=True):
-    """
-    Creates Gene Ontology graph from a custom set of genes (Windows Compatible)
-    """
     fname = f'./data/go_essential_{data_name}.csv'
+    
+    # ✅ 이미 파일이 있으면 실행할 필요 없음
     if os.path.exists(fname):
+        print(f"[INFO] GO graph already exists at {fname}, skipping generation.")
         return pd.read_csv(fname)
 
     with open(os.path.join(data_path, 'gene2go_all.pkl'), 'rb') as f:
@@ -249,11 +249,11 @@ def make_GO_Window(data_path, pert_list, data_name, num_workers=25, save=True):
 
     gene2go = {i: gene2go[i] for i in pert_list}
 
-    print('Creating custom GO graph, this can take a few minutes')
+    print("[INFO] Creating custom GO graph, this can take a few minutes")
+
     edge_list = []
-    
-    # ✅ ProcessPoolExecutor 사용 (Windows 호환)
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
         results = list(executor.map(get_GO_edge_list, [(g, gene2go) for g in gene2go.keys()]))
 
     for res in results:

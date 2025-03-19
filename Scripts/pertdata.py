@@ -270,7 +270,7 @@ class PertData:
         
     def prepare_split(self, split = 'simulation', 
                       seed = 1, 
-                      train_gene_set_size = 0.75,
+                      train_gene_set_size = 0.9,
                       combo_seen2_train_frac = 0.75,
                       combo_single_split_test_set_fraction = 0.1,
                       test_perts = None,
