@@ -12,11 +12,18 @@ from gears import PertData, GEARS
 from gears.inference import evaluate, compute_metrics, deeper_analysis
 import scanpy as sc
 predict_perturbation = 'MAP2K3+MAP2K6'
-model_path = 'Norman2019 self filter Data_train_condition_0.9_uncertainty'
+model_path = 'Norman2019 self filter Data_train_condition_0.25_uncertainty'
 
 def plot(stats_summary, metric_summary):
     print(type(stats_summary))
     print(type(metric_summary))
+    if isinstance(stats_summary, list) and len(stats_summary) > 0:
+        print(f"📌 stats_summary 첫 번째 요소 타입: {type(stats_summary[0])}")
+        print(f"📌 stats_summary 예제 데이터 (앞 5개): {stats_summary[:5]}")
+        
+    if isinstance(metric_summary, list) and len(metric_summary) > 0:
+        print(f"📌 metric_summary 첫 번째 요소 타입: {type(metric_summary[0])}")
+        print(f"📌 metric_summary 예제 데이터 (앞 5개): {metric_summary[:5]}")
 
     ax = sns.regplot(x = np.array(stats_summary),
                     y = np.array(metric_summary), 
@@ -68,6 +75,7 @@ if __name__ == "__main__":
     if os.path.exists(os.path.join(model_path, 'config.pkl')):
         gears_model.load_pretrained(gears_model.model_path)
         if gears_model.config['uncertainty'] :
+            gears_model.plot_perturbation(predict_perturbation,f"{model_path}/{predict_perturbation}_Best_Model", box_plot = True)
             test_res = evaluate(gears_model.dataloader['test_loader'], gears_model.model, gears_model.config['uncertainty'], gears_model.device)
             test_metrics, test_pert_res = compute_metrics(test_res)
             out = deeper_analysis(gears_model.adata, test_res)
@@ -78,12 +86,7 @@ if __name__ == "__main__":
             stats_summary = [np.exp(-pert2unc[i][0]) for i in test_pert_res.keys() if metric in out[i]]
             metric_summary = [out[i][metric] for i in test_pert_res.keys() if metric in out[i]]
             print(pearsonr(stats_summary, metric_summary))
-            font_dirs = ["./"]
-            font_files = font_manager.findSystemFonts(fontpaths=font_dirs)
-
-            for font_file in font_files:
-                font_manager.fontManager.addfont(font_file)
-
+            
             sns.set(rc={'figure.figsize':(6,6)})
             sns.set_theme(style="ticks", rc={"axes.facecolor": (0, 0, 0, 0)}, font_scale=1.8)
             pal = sns.color_palette("Set2").as_hex()
